@@ -34,7 +34,7 @@ import { AdminModule } from './admin/admin.module';
       entities: entities,
       charset: 'utf8mb4',
       synchronize: process.env.NODE_ENV === 'sync' ? true : false,
-      logging: process.env.NODE_ENV === 'prod' ? true : false,
+      logging: process.env.NODE_ENV === 'prod' ? false : true,
     }),
     RedisModule.forRoot({
       type: 'single',
