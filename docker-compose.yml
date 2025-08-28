@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '8000:8000'
+    volumes:
+      - .:/app # 현재 프로젝트 폴더를 컨테이너의 /app과 동기화
+      - /app/node_modules # 컨테이너 내부 node_modules을 로컬과 분리
+    environment:
+      - NODE_ENV=local
+    command: yarn start # 소스 변경 시 자동으로 반영
