@@ -57,22 +57,20 @@ async function bootstrap() {
   // 에러 핸들러
   app.useGlobalFilters(new GlobalExceptionFilter());
 
-  app.useStaticAssets(
-    '/Users/iseungbin/project/chat-project/workchat-backend/files',
-    {
-      prefix: '/public',
-    },
-  );
-  app.useStaticAssets('/images/noticefiles', {
-    prefix: '/notice',
-  });
+  app.useBodyParser('json', { limit: '200mb' });
 
-  // app.useStaticAssets('/images/workchat-client', {
-  //   prefix: '/public',
-  // });
-  // app.useStaticAssets('/images/noticefiles', {
-  //   prefix: '/notice',
-  // });
+  if (isProd) {
+    app.useStaticAssets('/images/workchat-client', { prefix: '/public' });
+    app.useStaticAssets('/images/noticefiles', { prefix: '/notice' });
+  } else {
+    app.useStaticAssets(
+      '/Users/iseungbin/project/chat-project/workchat-backend/files',
+      {
+        prefix: '/public',
+      },
+    );
+    app.useStaticAssets('/images/noticefiles', { prefix: '/notice' });
+  }
 
   logger.log(`workchat run ${port} port`);
   logger.log(`workchat run ${process.env.NODE_ENV} port`);
