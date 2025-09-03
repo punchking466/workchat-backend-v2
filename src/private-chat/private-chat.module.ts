@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { PrivateChatController } from './private-chat.controller';
 import { PrivateChatService } from './private-chat.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -11,9 +11,9 @@ import { EventsModule } from 'src/events/events.module';
 
 @Module({
   imports: [
-    EventsModule,
     JwtModule,
     UsersModule,
+    forwardRef(() => EventsModule),
     TypeOrmModule.forFeature([
       PrivateChatRoom,
       PrivateChatUsers,

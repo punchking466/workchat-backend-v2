@@ -72,10 +72,12 @@ export class PrivateChatController {
       await this.privateChatService.getRoomUsers(dto.roomId)
     ).map((u) => u.contactId);
 
-    const socketIds = await this.usersService.selectSocketId(receivers);
+    const socketIds = await this.usersService.selectSocketId(
+      receivers.filter((receiver) => receiver !== user.id),
+    );
 
-    this.eventsGateway.sendNotification(socketIds, {
-      id: payload.id,
+    await this.eventsGateway.sendNotification(socketIds, {
+      id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.message,
       roomType: 'P',
@@ -85,6 +87,11 @@ export class PrivateChatController {
     await this.eventsGateway.notifyUsersToRefresh(
       receivers,
       'refresh-chat-list',
+    );
+    await this.privateChatService.incUnreadForMessage(
+      receivers,
+      dto.roomId,
+      user.id,
     );
     return payload;
   }
@@ -106,9 +113,11 @@ export class PrivateChatController {
       await this.privateChatService.getRoomUsers(dto.roomId)
     ).map((u) => u.contactId);
 
-    const socketIds = await this.usersService.selectSocketId(receivers);
+    const socketIds = await this.usersService.selectSocketId(
+      receivers.filter((receiver) => receiver !== user.id),
+    );
 
-    this.eventsGateway.sendNotification(socketIds, {
+    await this.eventsGateway.sendNotification(socketIds, {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: '새로운 이미지',
@@ -120,6 +129,12 @@ export class PrivateChatController {
     await this.eventsGateway.notifyUsersToRefresh(
       receivers,
       'refresh-group-list',
+    );
+
+    await this.privateChatService.incUnreadForMessage(
+      receivers,
+      dto.roomId,
+      user.id,
     );
 
     return payload;
@@ -142,9 +157,11 @@ export class PrivateChatController {
       await this.privateChatService.getRoomUsers(dto.roomId)
     ).map((u) => u.contactId);
 
-    const socketIds = await this.usersService.selectSocketId(receivers);
+    const socketIds = await this.usersService.selectSocketId(
+      receivers.filter((receiver) => receiver !== user.id),
+    );
 
-    this.eventsGateway.sendNotification(socketIds, {
+    await this.eventsGateway.sendNotification(socketIds, {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.payload.title || '새로운 카드 메세지',
@@ -152,9 +169,16 @@ export class PrivateChatController {
     });
 
     this.eventsGateway.sendToRoom(`chat-${dto.roomId}`, 'new-message', payload);
+
     await this.eventsGateway.notifyUsersToRefresh(
       receivers,
       'refresh-chat-list',
+    );
+
+    await this.privateChatService.incUnreadForMessage(
+      receivers,
+      dto.roomId,
+      user.id,
     );
     return { success: true };
   }

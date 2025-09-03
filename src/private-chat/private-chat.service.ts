@@ -1,5 +1,10 @@
 import { InjectRepository } from '@nestjs/typeorm';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  forwardRef,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrivateChatRoom } from 'src/private-chat/entities/privateChatRoom.entity';
 import { PrivateChatUsers } from 'src/private-chat/entities/privateChatUsers.entity';
 import { UsersService } from 'src/users/users.service';
@@ -12,10 +17,14 @@ import {
 import { PrivateChatMessage } from './entities/privateChatMessage.entity';
 import { UserPayload } from 'src/common/decorator/user.decorator';
 import { saveImage } from 'src/utils/endecodeImage';
+import { InjectRedis } from '@nestjs-modules/ioredis';
+import Redis from 'ioredis';
+import { EventsGateway } from 'src/events/events.gateway';
 
 @Injectable()
 export class PrivateChatService {
   constructor(
+    @InjectRedis() private readonly redis: Redis,
     @InjectRepository(PrivateChatRoom)
     private pChatRoomRepository: Repository<PrivateChatRoom>,
     @InjectRepository(PrivateChatUsers)
@@ -24,7 +33,12 @@ export class PrivateChatService {
     private pChatMessageRepository: Repository<PrivateChatMessage>,
     private usersService: UsersService,
     private dataSource: DataSource,
+    @Inject(forwardRef(() => EventsGateway))
+    private readonly eventsGateway: EventsGateway,
   ) {}
+
+  private unreadHashKey = (uid: string) => `user:${uid}:private:unread`;
+  private unreadTotalKey = (uid: string) => `user:${uid}:private:unread:total`;
 
   findRoomId(userId: string, friendId: string) {
     return this.pChatUserRepository
@@ -77,6 +91,100 @@ export class PrivateChatService {
       await this.addUserToRoom(roomId, userId, userRepo);
       await this.addUserToRoom(roomId, friendId, userRepo);
       return { roomId: roomId };
+    });
+  }
+
+  async warmUnreadPrivteCache(userId: string) {
+    await this.redis.del(
+      this.unreadHashKey(userId),
+      this.unreadTotalKey(userId),
+    );
+
+    const rows = await this.pChatUserRepository
+      .createQueryBuilder('pu')
+      .leftJoin(
+        (qb) =>
+          qb
+            .from(PrivateChatMessage, 'pm')
+            .select('pm.roomId', 'gid')
+            .addSelect('MAX(pm.messageOrder)', 'lastOrder')
+            .groupBy('pm.roomId'),
+        'L',
+        'L.gid = pu.roomId',
+      )
+      .where('pu.contactId = :uid', { uid: userId })
+      .andWhere('pu.isDeleted = false')
+      .select([
+        'pu.roomId AS roomId',
+        'GREATEST(COALESCE(L.lastOrder, 0) - pu.lastReadMessageOrder, 0) AS unread',
+      ])
+      .getRawMany<{ roomId: number; unread: number }>();
+
+    const pipe = this.redis.pipeline();
+    let total = 0;
+    for (const r of rows) {
+      pipe.hset(this.unreadHashKey(userId), String(r.roomId), Number(r.unread));
+      total += Number(r.unread);
+    }
+    pipe.set(this.unreadTotalKey(userId), total);
+    await pipe.exec();
+    return {
+      perRoom: rows,
+      totalUnread: total,
+    };
+  }
+
+  async incUnreadForMessage(
+    receivers: string[],
+    roomId: number,
+    senderId: string,
+  ) {
+    if (receivers.length === 0) return;
+
+    const p = this.redis.pipeline();
+    for (const uid of receivers) {
+      if (uid === senderId) continue;
+      p.hincrby(this.unreadHashKey(uid), String(roomId), 1);
+      p.incr(this.unreadTotalKey(uid));
+    }
+    await p.exec();
+
+    for (const uid of receivers) {
+      if (uid === senderId) continue;
+
+      const res = await this.redis
+        .multi()
+        .hget(this.unreadHashKey(uid), String(roomId))
+        .get(this.unreadTotalKey(uid))
+        .exec();
+
+      if (!res) continue;
+
+      const totalUnreadRaw = res[1]?.[1];
+
+      const totalUnread = Number(totalUnreadRaw ?? 0);
+
+      await this.eventsGateway.emitToUser(uid, 'unread-update', {
+        private: totalUnread,
+      });
+    }
+  }
+
+  async clearUnreadForRoom(userId: string, roomId: number) {
+    const keyH = this.unreadHashKey(userId);
+    const keyT = this.unreadTotalKey(userId);
+    const prev = Number((await this.redis.hget(keyH, String(roomId))) || 0);
+    if (prev > 0) {
+      await this.redis
+        .multi()
+        .hset(keyH, String(roomId), 0)
+        .decrby(keyT, prev)
+        .exec();
+    }
+    const total = Number((await this.redis.get(keyT)) || 0);
+
+    await this.eventsGateway.emitToUser(userId, 'unread-update', {
+      private: total,
     });
   }
 
@@ -164,6 +272,11 @@ export class PrivateChatService {
   }
 
   async createCardMessage(user: UserPayload, dto: CreateCardMessageDto) {
+    if (dto.payload.imageUrl?.url) {
+      const imageName = await saveImage(dto.payload.imageUrl.url);
+      dto.payload.imageUrl.url = imageName;
+    }
+
     return this.dataSource.transaction(async (manager) => {
       const roomRepo = manager.getRepository(PrivateChatRoom);
       const userRepo = manager.getRepository(PrivateChatUsers);
@@ -243,21 +356,16 @@ export class PrivateChatService {
     roomId: number,
     allowNotification: boolean,
   ) {
-    return this.pChatUserRepository.update(
-      {
-        roomId: roomId,
-        contactId: userId,
-      },
-      {
-        allowNotification,
-      },
-    );
-    // .createQueryBuilder()
-    // .update()
-    // .set({ allowNotification })
-    // .where('roomId = :roomId', { roomId })
-    // .andWhere('contactId = :userId', { userId })
-    // .execute();
+    return this.dataSource.transaction(async (manager) => {
+      const userRepo = manager.getRepository(PrivateChatUsers);
+
+      return userRepo.update(
+        { roomId: roomId, contactId: userId },
+        {
+          allowNotification,
+        },
+      );
+    });
   }
 
   /**
@@ -462,6 +570,7 @@ export class PrivateChatService {
       await this.validateRoomId(roomId, roomRepo);
       const maxMessageOrder = (await this.getMaxOrder(roomId, msgRepo)) || 0;
       await this.readMessage(roomId, userId, maxMessageOrder, userRepo);
+      await this.clearUnreadForRoom(userId, roomId);
     });
   }
 

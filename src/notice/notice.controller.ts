@@ -18,7 +18,6 @@ export class NoticeController {
     @Query('pageSize') pageSize = 20,
     @Query('keyword') keyword = '',
   ) {
-    console.log(page, pageSize);
     const p = Number(page) || 1;
     const s = Math.min(Math.max(Number(pageSize) || 20, 1), 100); // 1~100 가드
     return this.noticeService.getNoticeList(user.id, p, s, keyword);

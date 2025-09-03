@@ -27,7 +27,6 @@ export class PrivateChatGuard implements CanActivate {
     if (!member) {
       throw new ForbiddenException('그룹 멤버가 아닙니다.');
     }
-    console.log(member);
     request['roomMember'] = {
       roomId,
       userId,

@@ -73,10 +73,10 @@ export class GroupChatController {
   @UseGuards(AuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'text 또는 이미지 발송',
+    summary: 'text 발송',
     description: '특정 그룹채팅방에 텍스트 또는 이미지 발송',
   })
-  async createTextOrImageMessage(
+  async createTextMessage(
     @User() user: UserPayload,
     @Body() dto: CreateTextMessageDto,
   ) {
@@ -86,9 +86,11 @@ export class GroupChatController {
       await this.groupChatService.getRoomUsers(dto.roomId)
     ).map((u) => u.contactId);
 
-    const socketIds = await this.usersService.selectSocketId(receivers);
+    const socketIds = await this.usersService.selectSocketId(
+      receivers.filter((receiver) => receiver !== user.id),
+    );
 
-    this.eventsGateway.sendNotification(socketIds, {
+    await this.eventsGateway.sendNotification(socketIds, {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.message,
@@ -104,6 +106,11 @@ export class GroupChatController {
     await this.eventsGateway.notifyUsersToRefresh(
       receivers,
       'refresh-group-list',
+    );
+    await this.groupChatService.incUnreadForMessage(
+      receivers,
+      dto.roomId,
+      user.id,
     );
 
     return payload;
@@ -126,9 +133,11 @@ export class GroupChatController {
       await this.groupChatService.getRoomUsers(dto.roomId)
     ).map((u) => u.contactId);
 
-    const socketIds = await this.usersService.selectSocketId(receivers);
+    const socketIds = await this.usersService.selectSocketId(
+      receivers.filter((receiver) => receiver !== user.id),
+    );
 
-    this.eventsGateway.sendNotification(socketIds, {
+    await this.eventsGateway.sendNotification(socketIds, {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: '새로운 이미지',
@@ -146,6 +155,12 @@ export class GroupChatController {
       'refresh-group-list',
     );
 
+    await this.groupChatService.incUnreadForMessage(
+      receivers,
+      dto.roomId,
+      user.id,
+    );
+
     return payload;
   }
 
@@ -161,13 +176,16 @@ export class GroupChatController {
     @Body() dto: CreateCardMessageDto,
   ) {
     const payload = await this.groupChatService.createCardMessage(user, dto);
+
     const receivers = (
       await this.groupChatService.getRoomUsers(dto.roomId)
     ).map((u) => u.contactId);
 
-    const socketIds = await this.usersService.selectSocketId(receivers);
+    const socketIds = await this.usersService.selectSocketId(
+      receivers.filter((receiver) => receiver !== user.id),
+    );
 
-    this.eventsGateway.sendNotification(socketIds, {
+    await this.eventsGateway.sendNotification(socketIds, {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.payload.title || '새로운 카드 메세지',
@@ -183,6 +201,12 @@ export class GroupChatController {
     await this.eventsGateway.notifyUsersToRefresh(
       receivers,
       'refresh-group-list',
+    );
+
+    await this.groupChatService.incUnreadForMessage(
+      receivers,
+      dto.roomId,
+      user.id,
     );
 
     return { success: true };

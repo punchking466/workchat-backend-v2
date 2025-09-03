@@ -1,4 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  forwardRef,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { GroupUsers, LeaveType } from './entities/groupUsers.entity';
 import { Groups } from './entities/groups.entity';
@@ -14,10 +19,14 @@ import { UserPayload } from 'src/common/decorator/user.decorator';
 import { GroupMessage } from './entities/groupMessage.entity';
 import { Users } from 'src/users/users.entity';
 import { saveImage } from 'src/utils/endecodeImage';
+import { InjectRedis } from '@nestjs-modules/ioredis';
+import Redis from 'ioredis';
+import { EventsGateway } from 'src/events/events.gateway';
 
 @Injectable()
 export class GroupChatService {
   constructor(
+    @InjectRedis() private readonly redis: Redis,
     @InjectRepository(Groups)
     private groupsRepository: Repository<Groups>,
     @InjectRepository(GroupUsers)
@@ -26,7 +35,12 @@ export class GroupChatService {
     private groupMessageRepository: Repository<GroupMessage>,
     private usersService: UsersService,
     private dataSource: DataSource,
+    @Inject(forwardRef(() => EventsGateway))
+    private eventsGateway: EventsGateway,
   ) {}
+
+  private unreadHashKey = (uid: string) => `user:${uid}:group:unread`;
+  private unreadTotalKey = (uid: string) => `user:${uid}:group:unread:total`;
 
   /**
    * 채팅방 메세지 가져오기
@@ -114,6 +128,100 @@ export class GroupChatService {
       ])
       .orderBy('gm.createdAt', 'DESC')
       .getRawMany();
+  }
+
+  async warmUnreadGroupCache(userId: string) {
+    await this.redis.del(
+      this.unreadHashKey(userId),
+      this.unreadTotalKey(userId),
+    );
+
+    const rows = await this.groupUserRepository
+      .createQueryBuilder('gu')
+      .leftJoin(
+        (qb) =>
+          qb
+            .from(GroupMessage, 'gm')
+            .select('gm.groupId', 'gid')
+            .addSelect('MAX(gm.messageOrder)', 'lastOrder')
+            .groupBy('gm.groupId'),
+        'L',
+        'L.gid = gu.groupId',
+      )
+      .where('gu.contactId = :uid', { uid: userId })
+      .andWhere('gu.isDeleted = false')
+      .select([
+        'gu.groupId AS roomId',
+        'GREATEST(COALESCE(L.lastOrder, 0) - gu.lastReadMessageOrder, 0) AS unread',
+      ])
+      .getRawMany<{ roomId: number; unread: number }>();
+
+    const pipe = this.redis.pipeline();
+    let total = 0;
+    for (const r of rows) {
+      pipe.hset(this.unreadHashKey(userId), String(r.roomId), Number(r.unread));
+      total += Number(r.unread);
+    }
+    pipe.set(this.unreadTotalKey(userId), total);
+    await pipe.exec();
+    return {
+      perRoom: rows,
+      totalUnread: total,
+    };
+  }
+
+  async incUnreadForMessage(
+    receivers: string[],
+    roomId: number,
+    senderId: string,
+  ) {
+    if (receivers.length === 0) return;
+
+    const p = this.redis.pipeline();
+    for (const uid of receivers) {
+      if (uid === senderId) continue;
+      p.hincrby(this.unreadHashKey(uid), String(roomId), 1);
+      p.incr(this.unreadTotalKey(uid));
+    }
+    await p.exec();
+
+    for (const uid of receivers) {
+      if (uid === senderId) continue;
+
+      const res = await this.redis
+        .multi()
+        .hget(this.unreadHashKey(uid), String(roomId))
+        .get(this.unreadTotalKey(uid))
+        .exec();
+
+      if (!res) continue;
+
+      const totalUnreadRaw = res[1]?.[1];
+
+      const totalUnread = Number(totalUnreadRaw ?? 0);
+
+      await this.eventsGateway.emitToUser(uid, 'unread-update', {
+        group: totalUnread,
+      });
+    }
+  }
+
+  async clearUnreadForRoom(userId: string, roomId: number) {
+    const keyH = this.unreadHashKey(userId);
+    const keyT = this.unreadTotalKey(userId);
+    const prev = Number((await this.redis.hget(keyH, String(roomId))) || 0);
+    if (prev > 0) {
+      await this.redis
+        .multi()
+        .hset(keyH, String(roomId), 0)
+        .decrby(keyT, prev)
+        .exec();
+    }
+    const total = Number((await this.redis.get(keyT)) || 0);
+
+    await this.eventsGateway.emitToUser(userId, 'unread-update', {
+      group: total,
+    });
   }
 
   async createGroupRoom(
@@ -213,6 +321,11 @@ export class GroupChatService {
   }
 
   async createCardMessage(user: UserPayload, dto: CreateCardMessageDto) {
+    if (dto.payload.imageUrl?.url) {
+      const imageName = await saveImage(dto.payload.imageUrl.url);
+      dto.payload.imageUrl.url = imageName;
+    }
+
     return this.dataSource.transaction(async (manager) => {
       const groupRepo = manager.getRepository(Groups);
       const userRepo = manager.getRepository(GroupUsers);
@@ -289,12 +402,16 @@ export class GroupChatService {
     roomId: number,
     allowNotification: boolean,
   ) {
-    return this.groupUserRepository.update(
-      { groupId: roomId, contactId: userId },
-      {
-        allowNotification,
-      },
-    );
+    return this.dataSource.transaction(async (manager) => {
+      const userRepo = manager.getRepository(GroupUsers);
+
+      return userRepo.update(
+        { groupId: roomId, contactId: userId },
+        {
+          allowNotification,
+        },
+      );
+    });
   }
 
   async getGroupUser(groupId: number, userId: string) {
@@ -449,6 +566,7 @@ export class GroupChatService {
       await this.validateRoomId(roomId, groupRepo);
       const maxMessageOrder = (await this.getMaxOrder(roomId, msgRepo)) || 0;
       await this.readMessage(roomId, userId, maxMessageOrder, userRepo);
+      await this.clearUnreadForRoom(userId, roomId);
     });
   }
 

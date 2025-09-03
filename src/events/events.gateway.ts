@@ -12,6 +12,10 @@ import { Server, Socket } from 'socket.io';
 import { UserHandler } from './handlers/user.handler';
 import { GroupChatService } from 'src/group-chat/group-chat.service';
 import { PrivateChatService } from 'src/private-chat/private-chat.service';
+import { forwardRef, Inject } from '@nestjs/common';
+import { InjectRedis } from '@nestjs-modules/ioredis';
+import Redis from 'ioredis';
+import { parseRoomFromPath } from 'src/utils/parseRoomFromPath';
 
 @WebSocketGateway({
   transports: ['websocket'],
@@ -23,8 +27,11 @@ export class EventsGateway
 {
   constructor(
     private userHandler: UserHandler,
+    @Inject(forwardRef(() => GroupChatService))
     private groupChatService: GroupChatService,
+    @Inject(forwardRef(() => PrivateChatService))
     private privateChatService: PrivateChatService,
+    @InjectRedis() private redis: Redis,
   ) {}
 
   @WebSocketServer() server: Server;
@@ -53,22 +60,59 @@ export class EventsGateway
     });
   }
 
-  sendNotification(
+  async sendNotification(
     socketIds: {
       userId: string;
       socketId: string;
       allowSound: boolean;
       allowVibration: boolean;
     }[],
-    payload: any,
+    payload: {
+      id: number;
+      title: string;
+      sMsg: string;
+      roomType: 'G' | 'P';
+    },
   ) {
-    socketIds.forEach((socketId) => {
-      this.server.to(`${socketId.socketId}`).emit('notification', {
+    const pipe = this.redis.pipeline();
+    for (const s of socketIds) pipe.get(`socket:${s.userId}:path`);
+    const results = await pipe.exec();
+    if (!results) {
+      return;
+    }
+
+    for (let i = 0; i < socketIds.length; i++) {
+      const s = socketIds[i];
+      const path = results[i]?.[1] as string | null;
+      const cur = parseRoomFromPath(path || '');
+      const isSameRoom =
+        (payload.roomType === 'G' &&
+          cur.kind === 'group' &&
+          Number(cur.roomId) === Number(payload.id)) ||
+        (payload.roomType === 'P' &&
+          cur.kind === 'private' &&
+          Number(cur.roomId) === Number(payload.id));
+      if (isSameRoom) continue;
+
+      this.server.to(s.socketId).emit('notification', {
         ...payload,
-        allowSound: socketId.allowSound,
-        allowVibration: socketId.allowVibration,
+        priority: '4',
+        allowSound: s.allowSound,
+        allowVibration: s.allowVibration,
       });
-    });
+    }
+  }
+
+  async emitToUser(userId: string, event: string, payload: any) {
+    const socketId = await this.userHandler.getSocketId(userId);
+    if (socketId) this.server.to(socketId).emit(event, payload);
+  }
+
+  @SubscribeMessage('init-unread')
+  async initUnread(@ConnectedSocket() client: Socket) {
+    await this.userHandler.getUnreadCount(client);
+
+    return { success: true };
   }
 
   @SubscribeMessage('join-chat-room')
@@ -117,5 +161,13 @@ export class EventsGateway
       await this.groupChatService.updateReadLastMessage(result.userId, roomId);
       return { success: true, roomId };
     }
+  }
+
+  @SubscribeMessage('path:update')
+  async onPathUpdate(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { path: string },
+  ) {
+    await this.userHandler.setCurrentPath(client, data.path);
   }
 }
