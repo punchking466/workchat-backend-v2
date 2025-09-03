@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Users } from './users.entity';
-import { Repository } from 'typeorm';
+import { DataSource, Repository } from 'typeorm';
 import { CreateUserDto, UpdateAllowNotificationDto } from './dto/users.dto';
 
 @Injectable()
@@ -9,6 +9,7 @@ export class UsersService {
   constructor(
     @InjectRepository(Users)
     private usersRepository: Repository<Users>,
+    private dataSource: DataSource,
   ) {}
   async createUser(createUserDto: CreateUserDto) {
     await this.usersRepository.save(createUserDto);
@@ -45,11 +46,11 @@ export class UsersService {
   }
 
   async updateSocketId(userId: string, socketId: string | null) {
-    await this.usersRepository.update({ id: userId }, { socketId });
-    // await this.usersRepository.save({
-    //   id: userId,
-    //   socketId,
-    // });
+    await this.dataSource.transaction(async (manager) => {
+      const usersRepo = manager.getRepository(Users);
+
+      await usersRepo.update({ id: userId }, { socketId });
+    });
   }
 
   selectSocketId(users: string[]): Promise<
@@ -87,13 +88,17 @@ export class UsersService {
   }
 
   async updateAllowNofication(userId: string, dto: UpdateAllowNotificationDto) {
-    await this.usersRepository.update(
-      { id: userId },
-      {
-        allowNotification: dto.allowNotification,
-        allowSound: dto.allowSound,
-        allowVibration: dto.allowVibration,
-      },
-    );
+    await this.dataSource.transaction(async (manager) => {
+      const usersRepo = manager.getRepository(Users);
+
+      await usersRepo.update(
+        { id: userId },
+        {
+          allowNotification: dto.allowNotification,
+          allowSound: dto.allowSound,
+          allowVibration: dto.allowVibration,
+        },
+      );
+    });
   }
 }

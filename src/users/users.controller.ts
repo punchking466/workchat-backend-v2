@@ -54,7 +54,6 @@ export class UsersController {
     @User() user: UserPayload,
     @Body() dto: UpdateAllowNotificationDto,
   ) {
-    console.log(dto);
     return this.usersService.updateAllowNofication(user.id, dto);
   }
 
