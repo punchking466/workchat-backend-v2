@@ -94,6 +94,7 @@ export class GroupChatController {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.message,
+      pushMsg: payload.message,
       roomType: 'G',
     });
 
@@ -141,6 +142,7 @@ export class GroupChatController {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: '새로운 이미지',
+      pushMsg: '새로운 이미지',
       roomType: 'G',
     });
 
@@ -189,6 +191,7 @@ export class GroupChatController {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.payload.title || '새로운 카드 메세지',
+      pushMsg: payload.payload.title || '새로운 카드 메세지',
       roomType: 'G',
     });
 

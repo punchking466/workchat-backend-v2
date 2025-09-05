@@ -71,6 +71,7 @@ export class EventsGateway
       id: number;
       title: string;
       sMsg: string;
+      pushMsg?: string;
       roomType: 'G' | 'P';
     },
   ) {
@@ -96,7 +97,7 @@ export class EventsGateway
 
       this.server.to(s.socketId).emit('notification', {
         ...payload,
-        priority: '4',
+        type: 0,
         allowSound: s.allowSound,
         allowVibration: s.allowVibration,
       });

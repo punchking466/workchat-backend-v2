@@ -80,6 +80,7 @@ export class PrivateChatController {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.message,
+      pushMsg: payload.message,
       roomType: 'P',
     });
 
@@ -121,6 +122,7 @@ export class PrivateChatController {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: '새로운 이미지',
+      pushMsg: '새로운 이미지',
       roomType: 'P',
     });
 
@@ -165,6 +167,7 @@ export class PrivateChatController {
       id: payload.roomId,
       title: payload.senderName,
       sMsg: payload.payload.title || '새로운 카드 메세지',
+      pushMsg: payload.payload.title || '새로운 카드 메세지',
       roomType: 'P',
     });
 
