@@ -7,18 +7,12 @@ import { ResponseInterceptor } from './interceptors/response.interceptor';
 import { GlobalExceptionFilter } from './filters/global-exception.filter';
 import { RedisIoAdapter } from './utils/redisAdapter';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import * as fs from 'fs';
 import type { Request, Response } from 'express';
 
 async function bootstrap() {
   const isProd = process.env.NODE_ENV === 'prod';
 
-  const httpsOptions = isProd
-    ? {
-        key: fs.readFileSync(process.env.SSL_KEY!, 'utf8'),
-        cert: fs.readFileSync(process.env.SSL_CERT!, 'utf8'),
-      }
-    : undefined;
+  const httpsOptions = undefined;
 
   const app = await NestFactory.create<NestExpressApplication>(
     AppModule,
